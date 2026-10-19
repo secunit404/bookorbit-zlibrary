@@ -47,7 +47,8 @@ scripts behind a cookie wall, and the plugin does not try to get past it. Instea
 - It tries the base URL, then the fallback mirrors, and skips any that cannot be reached, redirect,
   or answer with a page instead of JSON. The mirror that answered is tried first next time.
 - Every six hours BookOrbit's keepalive asks a working mirror for the site's own domain list
-  (`/eapi/info/domains`) and adds those domains after the configured ones.
+  (`/eapi/info/domains`) and adds those domains after the configured ones, for searching only. The
+  login, the session and downloads only ever go to the base URL and the fallback mirrors you set.
 
 The domain list can only be fetched from a mirror that still works. If every mirror you have
 configured dies at once, the search fails and names each mirror it tried; add a current one under
@@ -67,8 +68,9 @@ configured dies at once, the search fails and names each mirror it tried; add a 
 
 A plugin runs inside the BookOrbit process with that process's access: your database, library
 files and encryption key. `indexers/zlibrary/index.mjs` is one dependency-free file so it can be
-read before installing. It talks only to the configured mirrors, the domains Z-Library itself lists,
-and the download link the API returns, and only through BookOrbit's host fetch.
+read before installing. It talks only to the configured mirrors, the domains Z-Library itself lists
+(anonymous searches only), and the HTTPS download link the API returns, and only through
+BookOrbit's host fetch, which also checks that link against the private-address policy.
 
 Which sources you point BookOrbit at, and whether you are entitled to what they hold, is your
 decision and your responsibility.

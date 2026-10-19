@@ -12,7 +12,8 @@
  *
  * The site moves between domains. The main domains answer scripts with a cookie wall, which this
  * does not try to get past: it uses the mirrors that serve the API openly, fails over between them,
- * and learns new ones from the site's own domain list. See `candidateOrigins`.
+ * and learns new ones from the site's own domain list. See `candidateOrigins`. A listed domain is
+ * only ever searched anonymously: the account goes nowhere the operator did not configure.
  */
 
 const SEARCH_PATH = '/eapi/book/search';
@@ -113,14 +114,14 @@ const ISO_639_2_TO_1 = {
 
 /** The mirror that last answered, per indexer, so the next call does not start with a dead one. */
 const workingOrigin = new Map();
-/** Origins the site itself listed, shared by every indexer because the list is not per account. */
-const discovered = { origins: [] };
+/** Origins a mirror listed, per indexer, so one indexer's mirror cannot steer another's searches. */
+const discovered = new Map();
 /** The session a password login produced, per indexer. In memory only, so the password stays the one stored secret. */
 const logins = new Map();
 
 export default {
   apiVersion: 1,
-  version: '0.2.0',
+  version: '0.2.1',
   update: {
     manifestUrl: 'https://raw.githubusercontent.com/secunit404/bookorbit-zlibrary/main/updates/zlibrary.json',
     ed25519PublicKey: 'AskEHsppFpbIDVNRj0iwp6F2VBFY5ajmNWKB1R5Jbvo',
@@ -237,9 +238,17 @@ export default {
     const format = (release.format ?? file.extension ?? '').toLowerCase();
     if (!format) throw host.fail('error', `"${release.title}" states no format, so there is no way to name the file it would be saved as`);
 
-    host.logger.log(`[zlibrary.resolve] [end] indexerId=${config.id} book=${book.id} - download link resolved`);
+    let url;
+    try {
+      url = new URL(file.downloadLink, workingOrigin.get(config.id) ?? baseOf(config));
+    } catch {
+      throw host.fail('error', 'the site gave a download link that is not a URL');
+    }
+    if (url.protocol !== 'https:') throw host.fail('error', `the site gave a download link over ${url.protocol.replace(':', '')}, not https`);
+
+    host.logger.log(`[zlibrary.resolve] [end] indexerId=${config.id} book=${book.id} host=${url.host} - download link resolved`);
     return {
-      url: new URL(file.downloadLink, workingOrigin.get(config.id) ?? baseOf(config)).href,
+      url: url.href,
       fileName: `${sanitizeName(release.title)}.${format}`,
       sizeBytes: release.sizeBytes ?? null,
       format,
@@ -255,12 +264,23 @@ export default {
 /**
  * Every origin worth trying, best first: the one that last answered, the configured base URL, the
  * configured mirrors, then whatever the site's own domain list added.
+ *
+ * A call that carries the account never reaches a listed domain. The list arrives from a mirror,
+ * and a mirror that lied about it would otherwise be handed the password or the session.
  */
-function candidateOrigins(config) {
-  const configured = splitList(typeof config.settings?.mirrors === 'string' ? config.settings.mirrors : KNOWN_MIRRORS.join(','));
-  const all = [workingOrigin.get(config.id), baseOf(config), ...configured, ...discovered.origins];
+function candidateOrigins(config, withAccount) {
+  const configured = uniqueOrigins([
+    baseOf(config),
+    ...splitList(typeof config.settings?.mirrors === 'string' ? config.settings.mirrors : KNOWN_MIRRORS.join(',')),
+  ]);
+  const working = workingOrigin.get(config.id);
+  if (withAccount) return uniqueOrigins([configured.includes(working) ? working : null, ...configured]);
+  return uniqueOrigins([working, ...configured, ...(discovered.get(config.id) ?? [])]);
+}
+
+function uniqueOrigins(values) {
   const origins = [];
-  for (const value of all) {
+  for (const value of values) {
     const origin = originOf(value);
     if (origin && !origins.includes(origin)) origins.push(origin);
   }
@@ -275,9 +295,9 @@ function candidateOrigins(config) {
  * An answer the API itself gives is final whichever mirror gave it. A rejected session or a spent
  * daily allowance belongs to the account, and would be the same on every other mirror.
  */
-async function apiCall(config, host, path, { method, body, session }, signal, started = Date.now()) {
+async function apiCall(config, host, path, { method, body, session, withAccount = Boolean(session) }, signal, started = Date.now()) {
   const skipped = [];
-  for (const origin of candidateOrigins(config)) {
+  for (const origin of candidateOrigins(config, withAccount)) {
     if (signal?.aborted) break;
     if (skipped.length > 0 && Date.now() - started > SEARCH_BUDGET_MS) break;
 
@@ -335,11 +355,12 @@ function rememberOrigin(config, host, origin) {
  */
 async function refreshDomains(config, host) {
   const payload = await apiCall(config, host, DOMAINS_PATH, { method: 'GET' });
-  discovered.origins = (payload.domains ?? [])
+  const origins = (payload.domains ?? [])
     .filter((entry) => entry && typeof entry.domain === 'string' && entry.isRedirector !== true && entry.contentAvailable !== false)
     .map((entry) => originOf(entry.domain))
     .filter(Boolean);
-  host.logger.log(`[zlibrary.mirror] [end] indexerId=${config.id} listed=${discovered.origins.length} - domain list refreshed`);
+  discovered.set(config.id, origins);
+  host.logger.log(`[zlibrary.mirror] [end] indexerId=${config.id} listed=${origins.length} - domain list refreshed`);
 }
 
 /** The API says why in `error`, with a 200 or a 400 status that carries no meaning of its own. */
@@ -419,8 +440,9 @@ function bookOf(release) {
 async function accountCall(config, host, path, signal) {
   const email = emailOf(config);
   if (!email) {
+    const session = cookieSession(config, host);
     try {
-      return await apiCall(config, host, path, { method: 'GET', session: cookieSession(config, host) }, signal);
+      return await apiCall(config, host, path, { method: 'GET', session }, signal);
     } catch (error) {
       if (error?.failure === 'unauthorized') throw host.fail('unauthorized', `${error.message}. Check remix_userid and remix_userkey.`);
       throw error;
@@ -451,7 +473,7 @@ async function login(config, host, email, signal) {
   const body = new URLSearchParams({ email, password }).toString();
   let payload;
   try {
-    payload = await apiCall(config, host, LOGIN_PATH, { method: 'POST', body }, signal);
+    payload = await apiCall(config, host, LOGIN_PATH, { method: 'POST', body, withAccount: true }, signal);
   } catch (error) {
     if (error?.failure !== 'unauthorized') throw error;
     const refusal = `the site refused the login (${error.message.replace(/^.*?\((.*)\)$/, '$1')}). Check the e-mail and password.`;

@@ -1,8 +1,8 @@
 {
   "schemaVersion": 1,
   "type": "zlibrary",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "sourceUrl": "https://raw.githubusercontent.com/secunit404/bookorbit-zlibrary/main/indexers/zlibrary/index.mjs",
-  "sha256": "031746b714f0817752813eb453fcf285a48900cd1a7a92bd182211bfeb703db4",
-  "signature": "Q/RjEEeF1zsWaIR6TIAAkI2NhDWMSbSpewRllG6VAXCwCJ0kW3TrziCdlkmbEyAhMK3HVUiw7hAnDXcWyLseCA=="
+  "sha256": "7eb77fc346f732c817445a6c564c0a19f34368b130fd1bbeb3d740548c622477",
+  "signature": "1kS4cQS99h3SLiFYhPYMgWgGGyNLRXoNQV3kkec0R+VVy0p1NIsWalnVjNkQY90tJ+MR6F+Dk30qbsfBNZErAQ=="
 }

@@ -99,7 +99,7 @@ const searchAnswer = (books) => json({ success: 1, books, exactBooksCount: books
 
 console.log('declaration');
 ok('targets the contract this build speaks', plugin.apiVersion === 1);
-ok('plugin version', plugin.version === '0.2.0');
+ok('plugin version', plugin.version === '0.2.1');
 ok('signed update channel', plugin.update?.manifestUrl.endsWith('/updates/zlibrary.json') && plugin.update.ed25519PublicKey.length === 43);
 ok(
   'signed update manifest matches this source',
@@ -285,11 +285,24 @@ console.log('domain discovery');
     }
     return url.startsWith('https://new-mirror.example/') ? searchAnswer([BOOK]) : unreachable();
   });
-  await plugin.keepalive(cfg(), host);
-  const found = await plugin.search(query(), cfg({ settings: { mirrors: 'dead.example' } }), host);
+  const config = cfg({ settings: { mirrors: 'dead.example' } });
+  await plugin.keepalive(config, host);
+  const found = await plugin.search(query(), config, host);
   ok('keepalive reads the site domain list', host.calls[0] === 'https://z-lib.gd/eapi/info/domains');
-  ok('a listed domain is tried after the configured ones', found.length === 1 && host.calls.slice(1).join() === 'https://z-lib.gd/eapi/book/search,https://dead.example/eapi/book/search,https://new-mirror.example/eapi/book/search');
+  ok('a listed domain is tried after the configured ones', found.length === 1 && host.calls.slice(1).join() === 'https://z-lib.gd/eapi/book/search,https://dead.example/eapi/book/search,https://new-mirror.example/eapi/book/search', host.calls);
   ok('skips redirectors and domains without content', !host.calls.some((url) => /redirector|empty/.test(url)));
+
+  const before = host.reqs.length;
+  const other = await plugin.search(query(), cfg({ settings: { mirrors: 'dead.example' } }), host).catch((error) => error);
+  ok('keeps one indexer\'s listed domains away from another', other?.failure === 'unreachable' && !host.calls.slice(before).some((url) => url.includes('new-mirror')));
+
+  host.reqs.length = 0;
+  const tested = await plugin.test({ ...config, credential: '12345678:0123456789abcdef' }, host);
+  ok('never sends the session to a listed domain', !tested.success && host.calls.length > 0 && !host.calls.some((url) => url.includes('new-mirror')), host.calls);
+
+  host.reqs.length = 0;
+  await plugin.test({ ...config, credential: 'hunter2', settings: { mirrors: 'dead.example', email: 'me@example.com' } }, host);
+  ok('never sends the password to a listed domain', host.calls.length > 0 && !host.calls.some((url) => url.includes('new-mirror')), host.calls);
 }
 
 console.log('session');
@@ -320,6 +333,7 @@ console.log('session');
   const missing = await plugin.test(cfg({ credential: null }), host);
   const malformed = await plugin.test(cfg({ credential: 'not a session' }), host);
   ok('refuses a missing or malformed session before calling out', !missing.success && !malformed.success && host.reqs.length === 0);
+  ok('says once what a missing session should be', (missing.error.match(/remix_userid/g) ?? []).length === 1, missing.error);
 }
 
 console.log('password login');
@@ -386,6 +400,11 @@ const profileAnswer = () => json({ success: 1, user: { downloads_today: 1, downl
 }
 
 console.log('resolveFile');
+{
+  const host = makeHost(() => json({ success: 1, file: { downloadLink: 'http://dl.example/file' } }));
+  const threw = await plugin.resolveFile({ guid: '1-abc', title: 'x', format: 'epub', sizeBytes: null, seeders: null, leechers: null }, cfg(), host).catch((error) => error);
+  ok('refuses a download link that is not https', /not https/.test(threw?.message ?? ''), threw?.message);
+}
 const release = { guid: '129316134-a03568', title: 'Awakened (The Last Daughter Book 2)', format: 'epub', sizeBytes: 1990502, seeders: null, leechers: null };
 {
   const host = makeHost(() => json({ success: 1, file: { extension: 'epub', allowDownload: true, downloadLink: 'https://dl.example/file/abc?token=1' } }));
